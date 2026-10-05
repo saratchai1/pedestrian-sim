@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { init, NavMeshQuery } from 'recast-navigation';
-import { NavMeshHelper, threeToSoloNavMesh } from '@recast-navigation/three';
+import { NavMeshHelper, threeToSoloNavMesh, threeToTiledNavMesh } from '@recast-navigation/three';
 
 let initialized = false;
 
@@ -22,6 +22,7 @@ export type NavigationState = {
     navMeshTileCount: number;
     navMeshPolygonCount: number;
     navMeshTileDataBytesEstimate: number;
+    navMeshGenerator: 'solo' | 'tiled';
     buildTimeMs: number;
   };
 };
@@ -95,7 +96,14 @@ export async function buildNavigation(
     }
   }
 
-  const result = threeToSoloNavMesh(meshes, {
+  const navBounds = new THREE.Box3();
+  for (const mesh of meshes) {
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    if (mesh.geometry.boundingBox) navBounds.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+  }
+  const navSize = navBounds.getSize(new THREE.Vector3());
+  const useTiledGenerator = Math.max(navSize.x, navSize.z) > 256 || navSize.x * navSize.z > 10_000;
+  const generatorOptions = {
     cs: 0.16,
     ch: 0.10,
     walkableSlopeAngle: 45,
@@ -110,7 +118,10 @@ export async function buildNavigation(
     detailSampleDist: 6,
     detailSampleMaxError: 1,
     offMeshConnections,
-  });
+  };
+  const result = useTiledGenerator
+    ? threeToTiledNavMesh(meshes, { ...generatorOptions, tileSize: 32 })
+    : threeToSoloNavMesh(meshes, generatorOptions);
 
   if (!result.success || !result.navMesh) {
     throw new Error('NavMesh generation failed. Check model scale and walkable floor geometry.');
@@ -152,6 +163,7 @@ export async function buildNavigation(
       navMeshTileCount,
       navMeshPolygonCount,
       navMeshTileDataBytesEstimate,
+      navMeshGenerator: useTiledGenerator ? 'tiled' : 'solo',
       buildTimeMs: performance.now() - buildStart,
     },
   };

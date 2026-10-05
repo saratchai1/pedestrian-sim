@@ -12,7 +12,7 @@ const exampleConfig = join(repositoryRoot, 'config', 'zoo-model.example.json');
 if (!existsSync(localConfig)) {
   copyFileSync(exampleConfig, localConfig);
   process.stdout.write(`Created ignored local config: ${localConfig}\n`);
-  process.stdout.write('Set sourceUnit and scaleToMetres after checking model-inspection.md.\n');
+  process.stdout.write('Review detected FBX units and imported dimensions in model-inspection.md before preprocessing.\n');
 }
 
 function blenderExecutable() {

@@ -90,7 +90,7 @@ The 885 MB zoo FBX stays on the local machine and is not stored in GitHub. Use B
    npm run model:inspect -- --input "C:\path\to\zoo.fbx"
    ```
 
-3. Review `generated/models/zoo/model-inspection.md` and `classification-review.md`. Confirm source units from the authoring data or a known measured dimension, then set `sourceUnit` and `scaleToMetres` in the ignored `config/zoo-model.local.json`. Update include/exclude rules for the real walkway geometry.
+3. Review `generated/models/zoo/model-inspection.md` and `classification-review.md`. Binary FBX `UnitScaleFactor` metadata is read as centimetres per source unit; compare that scale and the reported metre bounds with an authoring setting or a known measured dimension. Add an independent `scaleReference` before treating scale validation as complete. Update include/exclude rules for the real walkway geometry.
 4. Generate the local-only derivatives and manifest:
 
    ```powershell

@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import bpy
 from mathutils import Matrix, Vector
 
@@ -20,6 +22,7 @@ from model_pipeline import (
     PIPELINE_VERSION,
     build_local_manifest,
     classify_navigation_mesh,
+    inspect_fbx_units,
     resolve_scale_to_metres,
     sha256_file,
     transform_bounds_to_metres,
@@ -249,8 +252,9 @@ def markdown_inspection(report: dict[str, Any]) -> str:
         f"- Size: {source['sizeBytes']:,} bytes",
         f"- Modified (UTC): {source['modifiedAt']}",
         f"- SHA-256: `{source['sha256']}`",
-        f"- Declared source unit: `{report['scale']['sourceUnit']}`",
-        f"- Scale to metres: `{report['scale']['scaleToMetres']}`",
+        f"- FBX source unit: `{(report['scale'].get('fbxGlobalSettings') or {}).get('sourceUnitLabel', report['scale']['sourceUnit'])}`",
+        f"- FBX `UnitScaleFactor` (cm per source unit): `{(report['scale'].get('fbxGlobalSettings') or {}).get('unitScaleFactorCm')}`",
+        f"- Blender-imported coordinate scale to metres: `{report['scale']['scaleToMetres']}`",
         f"- Objects / meshes: {inventory['objectCount']} / {inventory['meshCount']}",
         f"- Vertices / triangles: {inventory['vertexCount']:,} / {inventory['triangleCount']:,}",
         f"- Materials / textures: {inventory['materialCount']} / {len(inventory['textureReferences'])}",
@@ -264,7 +268,7 @@ def markdown_inspection(report: dict[str, Any]) -> str:
         f"- Shared mesh data groups: {len(inventory['sharedMeshDataGroups'])}",
         f"- Probable duplicate geometry groups: {len(inventory['probableDuplicateGeometryGroups'])}",
         "",
-        "Scale is not inferred from visual appearance. Set `sourceUnit` and `scaleToMetres` in the ignored local config after checking the model units.",
+        "Scale is read from binary FBX `UnitScaleFactor` when available and converted by Blender's FBX importer. Confirm imported dimensions against a measured reference; when metadata is absent, set a post-import `scaleToMetres` explicitly.",
         "",
     ]
     return "\n".join(lines)
@@ -298,26 +302,16 @@ def resolve_origin(inventory: dict[str, Any], config: dict[str, Any], cli_origin
 
 
 def export_role(role: str, objects: list[bpy.types.Object], destination: Path) -> dict[str, Any]:
-    export_collection = bpy.data.collections.new(f"_EvacSim_{role}_export")
-    bpy.context.scene.collection.children.link(export_collection)
-    copies: list[bpy.types.Object] = []
+    view_layer = bpy.context.view_layer
+    previous_active = view_layer.objects.active
+    previous_selection = list(bpy.context.selected_objects)
     try:
-        for source in objects:
-            duplicate = source.copy()
-            duplicate.data = source.data
-            duplicate.parent = None
-            duplicate.matrix_world = source.matrix_world.copy()
-            duplicate.name = f"{role.upper()}_{source.name}"
-            duplicate["evacsimRole"] = role
-            duplicate["evacsimSourceName"] = source.name
-            export_collection.objects.link(duplicate)
-            copies.append(duplicate)
-
+        print(f"GLB_EXPORT_STARTED={role} ({len(objects)} meshes)", flush=True)
         bpy.ops.object.select_all(action="DESELECT")
-        for duplicate in copies:
-            duplicate.select_set(True)
-        if copies:
-            bpy.context.view_layer.objects.active = copies[0]
+        for obj in objects:
+            obj.select_set(True)
+        if objects:
+            view_layer.objects.active = objects[0]
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         bpy.ops.export_scene.gltf(
@@ -333,10 +327,15 @@ def export_role(role: str, objects: list[bpy.types.Object], destination: Path) -
             export_lights=False,
         )
     finally:
-        for duplicate in copies:
-            bpy.data.objects.remove(duplicate, do_unlink=True)
-        bpy.data.collections.remove(export_collection)
+        bpy.ops.object.select_all(action="DESELECT")
+        for obj in previous_selection:
+            if bpy.data.objects.get(obj.name) is not None:
+                obj.select_set(True)
+        view_layer.objects.active = (
+            previous_active if previous_active and bpy.data.objects.get(previous_active.name) else None
+        )
 
+    print(f"GLB_EXPORT_DONE={role}", flush=True)
     return {"path": str(destination), "sizeBytes": destination.stat().st_size, "meshCount": len(objects)}
 
 
@@ -372,6 +371,9 @@ def run(force_inspect: bool = False) -> None:
     if scale_config is None:
         scale_config = config.get("scaleToMetres")
     unit = args.source_unit or config.get("sourceUnit", "unknown")
+    fbx_units = inspect_fbx_units(source)
+    if unit == "unknown" and fbx_units:
+        unit = str(fbx_units["sourceUnit"])
 
     stat = source.stat()
     source_metadata = {
@@ -392,12 +394,25 @@ def run(force_inspect: bool = False) -> None:
         use_image_search=not args.inspect_only,
     )
     print("FBX_IMPORT_DONE", flush=True)
+    blender_scene_units = bpy.context.scene.unit_settings
+    if scale_config is None and fbx_units and blender_scene_units.system != "NONE":
+        # Blender's FBX importer has already applied UnitScaleFactor to imported
+        # coordinates. Convert Blender units to metres, not raw FBX units again.
+        scale_config = float(blender_scene_units.scale_length)
     unresolved_scale = None
     try:
-        scale_to_metres = resolve_scale_to_metres(unit, scale_config)
+        scale_to_metres = resolve_scale_to_metres("unknown", scale_config)
     except ValueError as error:
         unresolved_scale = str(error)
         scale_to_metres = None
+    if args.scale_to_metres is not None or config.get("scaleToMetres") is not None:
+        scale_resolution_source = "explicit CLI/config post-import coordinate conversion"
+    elif fbx_units and scale_to_metres is not None:
+        scale_resolution_source = "FBX UnitScaleFactor via Blender importer; Blender scene scaleLength"
+    elif unit != "unknown" and scale_to_metres is not None:
+        scale_resolution_source = "declared source unit; Blender scene scaleLength"
+    else:
+        scale_resolution_source = "unresolved"
 
     rules = config.get("classification", {})
     print("MODEL_INVENTORY_STARTED", flush=True)
@@ -415,6 +430,10 @@ def run(force_inspect: bool = False) -> None:
             "scaleToMetres": scale_to_metres,
             "resolved": scale_to_metres is not None,
             "resolutionError": unresolved_scale,
+            "fbxGlobalSettings": fbx_units,
+            "coordinateSpaceUnit": "Blender units after FBX import",
+            "blenderSceneScaleLength": float(blender_scene_units.scale_length),
+            "resolutionSource": scale_resolution_source,
         },
         "axisOrientation": {
             "blenderSourceUpAxis": "Z",
@@ -468,7 +487,7 @@ def run(force_inspect: bool = False) -> None:
         return
     if scale_to_metres is None:
         raise ValueError(
-            "Inspection is complete, but no safe scale is configured. Set sourceUnit and scaleToMetres in config/zoo-model.local.json, then run again."
+            "Inspection is complete, but scale is unresolved. Confirm the imported coordinates and set a post-import scaleToMetres in config/zoo-model.local.json, then run again."
         )
 
     bounds = inventory.get("boundsMetres")

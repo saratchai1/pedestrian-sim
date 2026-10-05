@@ -15,7 +15,7 @@
       "\\b(walkway|boardwalk|path|pavement|corridor|floor|ramp|stair|bridge|road|gate)\\b"
     ],
     "excludeNamePatterns": [
-      "\\b(tree|plant|foliage|leaf|animal|bench|lamp|sign|furniture|ornament|decor|roof|ceiling)\\b"
+      "\\b(tree|plant|foliage|leaf|animal|bench|lamp|sign|furniture|ornament|decor|roof|ceiling|water|lake|pool|railing|handrail)\\b"
     ],
     "forceIncludeNames": [],
     "forceExcludeNames": [],

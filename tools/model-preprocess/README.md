@@ -18,11 +18,11 @@ npm run model:inspect -- --input "C:\path with spaces\zoo.fbx"
 
 The command creates `generated/models/zoo/model-inspection.json`, `model-inspection.md`, and `classification-review.json`. It reports object/mesh/vertex/triangle/material counts, texture references, bounds, source coordinate magnitudes, hidden and empty objects, degenerate meshes, shared/probable duplicate geometry, and hierarchy depth. The report includes the source size, modified time, and SHA-256.
 
-The first run creates `config/zoo-model.local.json` from the committed example. Confirm the FBX unit using the source authoring settings or a known measured dimension, then set `sourceUnit` and `scaleToMetres` in that local file. To get a scale validation `PASS`, also set `scaleReference.objectName`, `measuredAxis`, and `measuredLengthMetres` from a known object dimension; without that reference, the pipeline reports `REVIEW`. Supported declared units are metres (`1`), centimetres (`0.01`), and millimetres (`0.001`). Use `custom` with an explicit conversion when the source uses another unit. Unknown units do not receive a guessed scale.
+The first run creates `config/zoo-model.local.json` from the committed example. Binary FBX files with a valid `UnitScaleFactor` are read directly; this value is centimetres per raw source unit. Blender's FBX importer applies that factor during import. The pipeline then converts the resulting Blender coordinates to metres using `scene.unit_settings.scale_length` (1.0 in the inspected scene), so it never multiplies the raw FBX factor a second time. Reports keep both values separate. Confirm the imported dimensions against a known measured object before treating scale validation as complete. To get a scale validation `PASS`, set `scaleReference.objectName`, `measuredAxis`, and `measuredLengthMetres`; without that independent reference, the pipeline reports `REVIEW`. `scaleToMetres` in the local config is for Blender-imported coordinates, not raw FBX coordinates. If neither FBX metadata nor an explicit post-import conversion gives a scale, the pipeline does not guess one.
 
 ## Review and preprocess
 
-The name rules in the example intentionally include only clearly named walkways, paths, floors, ramps, stairs, bridges, roads, and gates. They exclude obvious decoration such as trees, foliage, signs, furniture, and roofs. Everything else remains `review`; meshes over the configured triangle limit and extremely small meshes also remain `review` even when their names match a walkway rule. It is not silently added to the navigation mesh. Edit the local config's `forceIncludeNames`, `forceExcludeNames`, or regex rules after reviewing `classification-review.md` and its JSON detail.
+The name rules in the example intentionally include clearly named walkways, paths, floors, ramps, stairs, bridges, roads, and gates. They exclude obvious decoration plus water surfaces and railings. Everything else remains `review`; meshes over the configured triangle limit and extremely small meshes also remain `review` even when their names match a walkway rule. It is not silently added to the navigation mesh. Edit the local config's `forceIncludeNames`, `forceExcludeNames`, or regex rules after reviewing `classification-review.md` and its JSON detail.
 
 Then run:
 
@@ -30,11 +30,7 @@ Then run:
 npm run model -- --input "C:\path with spaces\zoo.fbx"
 ```
 
-Or supply a one-time explicit conversion:
-
-```powershell
-npm run model -- --input "C:\path with spaces\zoo.fbx" --source-unit cm --scale-to-metres 0.01
-```
+If the FBX has no unit metadata, set an explicit `scaleToMetres` only after comparing a known dimension in the imported model with its real measured size. This setting applies to Blender-imported coordinates, so it must not repeat a conversion already applied by Blender.
 
 The pipeline writes `visual.glb`, `nav.glb`, `zoo-model.local.json`, and updated inspection/classification reports under `generated/models/zoo/`. The local manifest records the absolute source path, SHA-256, size, modified time, unit conversion, local-origin transform, Blender and pipeline versions, derivative sizes, triangle counts, processing time, and peak memory when available. Local manifests can contain a user path and are ignored by Git.
 

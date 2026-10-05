@@ -1,14 +1,25 @@
+import struct
 import unittest
 
 from model_pipeline import (
     build_local_manifest,
     classify_navigation_mesh,
+    parse_fbx_units,
     resolve_scale_to_metres,
     transform_bounds_to_metres,
 )
 
 
 class ModelPipelineTests(unittest.TestCase):
+    def test_reads_embedded_binary_fbx_unit_scale(self):
+        marker = b"UnitScaleFactorS\x06\x00\x00\x00doubleS\x06\x00\x00\x00NumberS\x00\x00\x00\x00D"
+        header = b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00" * 8 + marker + struct.pack("<d", 30.48)
+        metadata = parse_fbx_units(header)
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["sourceUnit"], "custom")
+        self.assertEqual(metadata["sourceUnitLabel"], "ft")
+        self.assertAlmostEqual(metadata["sourceUnitToMetres"], 0.3048)
+
     def test_unit_scale_conversion_requires_an_explicit_or_declared_unit(self):
         self.assertEqual(resolve_scale_to_metres("m", None), 1.0)
         self.assertEqual(resolve_scale_to_metres("cm", None), 0.01)

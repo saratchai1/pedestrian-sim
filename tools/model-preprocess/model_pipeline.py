@@ -5,11 +5,55 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import struct
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 PIPELINE_VERSION = "1.0.0"
 UNIT_TO_METRES = {"m": 1.0, "metre": 1.0, "meter": 1.0, "cm": 0.01, "mm": 0.001}
+
+
+def parse_fbx_units(header: bytes) -> dict[str, float | str | None] | None:
+    """Read binary FBX global unit factors from its header bytes."""
+    if not header.startswith(b"Kaydara FBX Binary"):
+        return None
+
+    def read_double_property(property_name: str) -> float | None:
+        marker = property_name.encode("ascii") + b"S\x06\x00\x00\x00doubleS\x06\x00\x00\x00NumberS\x00\x00\x00\x00D"
+        offset = header.find(marker)
+        if offset < 0 or offset + len(marker) + 8 > len(header):
+            return None
+        value = struct.unpack_from("<d", header, offset + len(marker))[0]
+        return value if math.isfinite(value) and value > 0 else None
+
+    unit_scale_cm = read_double_property("UnitScaleFactor")
+    original_unit_scale_cm = read_double_property("OriginalUnitScaleFactor")
+    if unit_scale_cm is None:
+        return None
+
+    known_units = ((100.0, "m"), (1.0, "cm"), (0.1, "mm"), (2.54, "in"), (30.48, "ft"), (91.44, "yd"))
+    unit_name = next(
+        (name for factor, name in known_units if math.isclose(unit_scale_cm, factor, rel_tol=1e-6)),
+        "custom",
+    )
+    source_unit = unit_name if unit_name in {"m", "cm", "mm"} else "custom"
+    return {
+        "unitScaleFactorCm": unit_scale_cm,
+        "originalUnitScaleFactorCm": original_unit_scale_cm,
+        "sourceUnit": source_unit,
+        "sourceUnitLabel": unit_name,
+        "sourceUnitToMetres": unit_scale_cm / 100.0,
+    }
+
+
+def inspect_fbx_units(path: str | Path) -> dict[str, float | str] | None:
+    """Read binary FBX units without importing the model.
+
+    FBX's UnitScaleFactor is the number of centimetres in one source unit.
+    Blender's scene unit settings are separate metadata and are not used here.
+    """
+    with Path(path).open("rb") as stream:
+        return parse_fbx_units(stream.read(64 * 1024))
 
 
 def resolve_scale_to_metres(source_unit: str | None, configured_scale: float | None) -> float:
@@ -136,7 +180,10 @@ def build_local_manifest(
         "sourceSize": int(source_size),
         "sourceModifiedAt": source_modified_at,
         "sourceUnit": source_unit,
-        "scaleToMetres": resolve_scale_to_metres(source_unit, scale_to_metres),
+        # This conversion is applied to Blender-imported coordinates, whose unit
+        # can differ from the raw FBX source unit (already converted by Blender).
+        "scaleToMetres": resolve_scale_to_metres("unknown", scale_to_metres),
+        "scaleSemantics": "Blender-imported coordinates to simulation metres",
         "localOriginSource": [float(value) for value in local_origin_source],
         "coordinateTransform": "simulation = (source - localOriginSource) * scaleToMetres",
         "visualDerivative": visual_derivative,
