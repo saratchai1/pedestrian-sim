@@ -119,8 +119,9 @@ export async function buildNavigation(
     detailSampleMaxError: 1,
     offMeshConnections,
   };
+  const tileSizeCells = Math.max(1, Math.round(32 / generatorOptions.cs));
   const result = useTiledGenerator
-    ? threeToTiledNavMesh(meshes, { ...generatorOptions, tileSize: 32 })
+    ? threeToTiledNavMesh(meshes, { ...generatorOptions, tileSize: tileSizeCells })
     : threeToSoloNavMesh(meshes, generatorOptions);
 
   if (!result.success || !result.navMesh) {
