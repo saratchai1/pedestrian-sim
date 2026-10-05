@@ -3,10 +3,12 @@ import * as THREE from 'three';
 import { createDemoBuilding } from './demo';
 import { BuildEditor, type BuildTool } from './build/editor';
 import { loadFbxFile } from './importers/fbx';
+import { loadGlbFile } from './importers/gltf';
 import {
   loadIfcFile,
   type IfcSemantics,
 } from './importers/ifc';
+import { selectModelFiles } from './importers/model-files';
 import { buildNavigation, type NavigationState } from './navigation';
 import {
   createEvacSimModel,
@@ -60,6 +62,7 @@ viewer.scene.add(buildEditor.preview);
 viewer.modelStage.add(buildEditor.root);
 
 let navigation: NavigationState | null = null;
+let importedNavigationRoot: THREE.Group | null = null;
 let simulation: EvacuationSimulation | null = null;
 let spawn: THREE.Vector3 | null = null;
 let exits: ExitTarget[] = [];
@@ -70,6 +73,19 @@ let scenarioSource: ScenarioSource = 'manual';
 let modelDirty = true;
 let spawnCreationArmed = false;
 let lastUiUpdate = 0;
+
+function disposeDetachedNavigationRoot() {
+  if (!importedNavigationRoot) return;
+  if (importedNavigationRoot !== viewer.modelRoot) {
+    importedNavigationRoot.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => material.dispose());
+    });
+  }
+  importedNavigationRoot = null;
+}
 
 function resetBuildEditor() {
   spawnCreationArmed = false;
@@ -566,6 +582,7 @@ async function loadModelData(
   const root = new THREE.Group();
   root.name = model.name || 'EvacSim model';
   modelScale.value = '1';
+  disposeDetachedNavigationRoot();
   viewer.setModel(root, 1);
 
   buildEditor.importPlan(JSON.stringify(model.plan));
@@ -806,7 +823,13 @@ async function rebuildNavigation(useDemoScenario: boolean) {
       ...buildIfcStairLinks(),
       ...buildEditor.getNavigationLinks(),
     ];
-    navigation = await buildNavigation(viewer.modelStage, stairLinks);
+    const navigationInputs = importedNavigationRoot
+      ? [importedNavigationRoot, buildEditor.root]
+      : [viewer.modelStage];
+    navigation = await buildNavigation(navigationInputs, stairLinks);
+    if (import.meta.env.DEV) {
+      console.info('[navigation] built', navigation.metrics);
+    }
     navigation.helper.visible = showNav.checked;
     viewer.scene.add(navigation.helper);
 
@@ -863,6 +886,7 @@ async function loadDemo() {
   modelScale.value = '1';
   resetBuildEditor();
   const root = createDemoBuilding();
+  disposeDetachedNavigationRoot();
   viewer.setModel(root, 1);
   scenarioSource = 'manual';
   markModelDirty('Demo loaded · unsaved');
@@ -870,41 +894,77 @@ async function loadDemo() {
   await rebuildNavigation(true);
 }
 
-async function importFile(file: File) {
-  const extension = file.name.split('.').pop()?.toLowerCase();
-
-  if (extension !== 'ifc' && extension !== 'fbx') {
-    setStatus('Only IFC and FBX are supported', 'error');
-    return;
-  }
-
-  setStatus('Importing ' + extension.toUpperCase() + '...', 'busy');
-
+async function importFiles(files: readonly File[]) {
+  const importStartedAt = performance.now();
+  let pendingNavigationRoot: THREE.Group | null = null;
   try {
-    clearNavigation();
-    clearScenario();
-
+    const selection = selectModelFiles(files);
+    const name = selection.kind === 'derivatives'
+      ? `${selection.visualFile.name} + ${selection.navigationFile.name}`
+      : selection.kind === 'glb'
+        ? selection.visualFile.name
+        : selection.file.name;
+    if (selection.kind === 'derivatives') {
+      // The preprocessing manifest and both GLBs are already expressed in metres.
+      modelScale.value = '1';
+    }
+    const extension = selection.kind === 'ifc' || selection.kind === 'fbx'
+      ? selection.kind
+      : 'glb';
+    setStatus('Importing ' + (selection.kind === 'derivatives' ? 'GLB derivatives' : extension.toUpperCase()) + '...', 'busy');
     let root: THREE.Group;
 
-    if (extension === 'ifc') {
-      const imported = await loadIfcFile(file);
+    if (selection.kind === 'ifc') {
+      const imported = await loadIfcFile(selection.file);
       root = imported.group;
       ifcSemantics = imported.semantics;
+    } else if (selection.kind === 'fbx') {
+      root = await loadFbxFile(selection.file);
+      ifcSemantics = null;
+    } else if (selection.kind === 'derivatives') {
+      root = await loadGlbFile(selection.visualFile);
+      pendingNavigationRoot = await loadGlbFile(selection.navigationFile);
+      ifcSemantics = null;
     } else {
-      root = await loadFbxFile(file);
+      root = await loadGlbFile(selection.visualFile);
       ifcSemantics = null;
     }
 
+    const scenePreparationStartedAt = performance.now();
+    clearNavigation();
+    clearScenario();
     updateIfcSummary();
-
     resetBuildEditor();
+    disposeDetachedNavigationRoot();
     viewer.setModel(root, currentScale());
+    if (pendingNavigationRoot && pendingNavigationRoot !== root) {
+      importedNavigationRoot = pendingNavigationRoot;
+      importedNavigationRoot.scale.setScalar(currentScale());
+    }
+    pendingNavigationRoot = null;
     scenarioSource = 'manual';
     markModelDirty('Imported source loaded · unsaved');
     updateBuildStats();
-    setStatus(file.name + ' loaded');
+    if (import.meta.env.DEV) {
+      console.info('[model] imported', {
+        kind: selection.kind,
+        fileCount: files.length,
+        totalBytes: files.reduce((total, file) => total + file.size, 0),
+        loadAndParseMs: scenePreparationStartedAt - importStartedAt,
+        scenePreparationMs: performance.now() - scenePreparationStartedAt,
+      });
+    }
+    setStatus(name + ' loaded');
     await rebuildNavigation(false);
   } catch (error) {
+    if (pendingNavigationRoot) {
+      pendingNavigationRoot.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.geometry.dispose();
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      });
+    }
     console.error(error);
     ifcSemantics = null;
     updateIfcSummary();
@@ -1029,6 +1089,7 @@ function newBlankPlan() {
   root.name = 'EvacSim blank plan';
 
   modelScale.value = '1';
+  disposeDetachedNavigationRoot();
   viewer.setModel(root, 1);
   updateBuildStats();
   setWorkspaceMode('build');
@@ -1161,6 +1222,7 @@ function runSimulation() {
   }));
 
   try {
+    const simulationStartedAt = performance.now();
     simulation = new EvacuationSimulation(
       navigation.navMesh,
       navigation.query,
@@ -1189,6 +1251,13 @@ function runSimulation() {
 
     viewer.scene.add(simulation.helper);
     simulation.start();
+    if (import.meta.env.DEV) {
+      console.info('[simulation] initialized', {
+        requestedOccupants: runtimeOccupants,
+        createdAgents: simulation.agents.length,
+        durationMs: performance.now() - simulationStartedAt,
+      });
+    }
     setWorkspaceMode('simulate');
     updateSimulationWorkspaceLock();
     element<HTMLButtonElement>('exportBtn').disabled = false;
@@ -1640,6 +1709,7 @@ element('buildNav').addEventListener('click', () => {
 element('applyScale').addEventListener('click', () => {
   if (!viewer.modelRoot) return;
   viewer.applyScale(currentScale());
+  importedNavigationRoot?.scale.setScalar(currentScale());
   void rebuildNavigation(false);
 });
 
@@ -1696,8 +1766,9 @@ bridgeIfcStairs.addEventListener('change', () => {
 showHeatmap.addEventListener('change', updateHeatmap);
 
 fileInput.addEventListener('change', () => {
-  const file = fileInput.files?.[0];
-  if (file) void importFile(file);
+  const files = Array.from(fileInput.files || []);
+  if (files.length) void importFiles(files);
+  fileInput.value = '';
 });
 
 for (const name of ['dragenter', 'dragover']) {
@@ -1715,8 +1786,8 @@ for (const name of ['dragleave', 'drop']) {
 }
 
 dropzone.addEventListener('drop', (event) => {
-  const file = (event as DragEvent).dataTransfer?.files?.[0];
-  if (file) void importFile(file);
+  const files = Array.from((event as DragEvent).dataTransfer?.files || []);
+  if (files.length) void importFiles(files);
 });
 
 window.addEventListener('beforeunload', (event) => {
@@ -1725,6 +1796,8 @@ window.addEventListener('beforeunload', (event) => {
 });
 
 const clock = new THREE.Clock();
+let perfSampleStartedAt = performance.now();
+let perfSampleFrameCount = 0;
 
 function animate() {
   requestAnimationFrame(animate);
@@ -1732,6 +1805,19 @@ function animate() {
   simulation?.update(clock.getDelta(), viewer.camera.position);
 
   const now = performance.now();
+
+  if (import.meta.env.DEV) {
+    perfSampleFrameCount += 1;
+    if (now - perfSampleStartedAt >= 5000) {
+      console.info('[runtime] performance sample', {
+        fps: Math.round(perfSampleFrameCount * 1000 / (now - perfSampleStartedAt)),
+        activeAgents: simulation?.snapshot().active ?? 0,
+        totalAgents: simulation?.agents.length ?? 0,
+      });
+      perfSampleStartedAt = now;
+      perfSampleFrameCount = 0;
+    }
+  }
 
   if (now - lastUiUpdate > 250) {
     updateResults();

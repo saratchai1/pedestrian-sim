@@ -8,7 +8,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run && npm run test:model-tools",
+    "test:model-tools": "python -m unittest discover -s tools/model-preprocess -p \"test_*.py\"",
+    "model": "node tools/model-preprocess/run.mjs",
+    "model:inspect": "node tools/model-preprocess/run.mjs --inspect-only",
+    "check:artifacts": "node scripts/check-large-artifacts.mjs"
   },
   "dependencies": {
     "@recast-navigation/three": "0.43.1",

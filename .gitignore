@@ -4,3 +4,13 @@ dist
 .env
 .env.*
 !.env.example
+/public/web-ifc*.wasm
+/.tools/
+/tools/blender-*/
+/local-data/
+/generated/models/
+/config/zoo-model.local.json
+__pycache__/
+*.py[cod]
+*.blend
+*.blend1

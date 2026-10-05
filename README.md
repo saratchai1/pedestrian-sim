@@ -79,6 +79,31 @@ Build geometry is stored in world metres and is combined with imported model geo
 9. Run the simulation.
 10. Save the completed scenario for comparison or export the agent CSV.
 
+## Zoo Large Model Workflow
+
+The 885 MB zoo FBX stays on the local machine and is not stored in GitHub. Use Blender's headless importer to inspect and produce a visual GLB and a separate lightweight navigation GLB. The workflow keeps source coordinates, records a reversible local-origin offset, requires an explicit unit conversion, and leaves uncertain geometry in a review report. It does not decimate or merge geometry automatically.
+
+1. Install the Windows portable Blender ZIP without administrator rights and place it under `.tools/blender/` or `tools/blender-<version>-windows-x64/`, or set `BLENDER_EXE` to its `blender.exe` path.
+2. Inspect the source without creating derivatives:
+
+   ```powershell
+   npm run model:inspect -- --input "C:\path\to\zoo.fbx"
+   ```
+
+3. Review `generated/models/zoo/model-inspection.md` and `classification-review.md`. Confirm source units from the authoring data or a known measured dimension, then set `sourceUnit` and `scaleToMetres` in the ignored `config/zoo-model.local.json`. Update include/exclude rules for the real walkway geometry.
+4. Generate the local-only derivatives and manifest:
+
+   ```powershell
+   npm run model -- --input "C:\path\to\zoo.fbx"
+   ```
+
+5. Start EvacSim with `npm run dev` and import `visual.glb` and `nav.glb` together. Visual geometry appears in the viewer; only the navigation derivative and Build Mode geometry feed NavMesh generation.
+6. Build the NavMesh, draw Spawn Areas on walkable surfaces, define exits and widths, and run the 100-agent evacuation scenario before trying larger populations. Check route connectivity, path queries, queues, evacuation completion, metrics, and CSV output against the real geometry.
+
+Inspection reports, local manifests, generated GLBs, source FBX files, and Blender working files are excluded from Git. `npm run check:artifacts` guards against accidentally tracking large files. See [tools/model-preprocess/README.md](tools/model-preprocess/README.md) for unit, classification, scale, and troubleshooting details.
+
+Priority order is walkway topology, scale, exit and bottleneck widths, navigation connectivity, reproducibility, simulation performance, rendering performance, and visual fidelity. EvacSim simulates pedestrian movement on geometry; it does not simulate smoke, temperature, toxicity, FED, visibility, or fire spread.
+
 ## Exit flow prototype
 
 When enabled, the exit-flow limiter uses:

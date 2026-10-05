@@ -14,6 +14,16 @@ export type NavigationState = {
   navMesh: any;
   query: NavMeshQuery;
   helper: NavMeshHelper;
+  metrics: {
+    recastInitializationMs: number;
+    inputMeshCount: number;
+    inputTriangleCount: number;
+    inputGeometryBytes: number;
+    navMeshTileCount: number;
+    navMeshPolygonCount: number;
+    navMeshTileDataBytesEstimate: number;
+    buildTimeMs: number;
+  };
 };
 
 export type NavigationLink = {
@@ -27,27 +37,62 @@ export type NavigationLink = {
 };
 
 export async function buildNavigation(
-  root: THREE.Object3D,
+  root: THREE.Object3D | THREE.Object3D[],
   offMeshConnections: NavigationLink[] = [],
 ): Promise<NavigationState> {
+  const totalStart = performance.now();
   await ensureRecast();
-  root.updateMatrixWorld(true);
+  const recastInitializationMs = performance.now() - totalStart;
+  const buildStart = performance.now();
+  const roots = Array.isArray(root) ? root : [root];
+  roots.forEach((item) => item.updateMatrixWorld(true));
 
   const meshes: THREE.Mesh[] = [];
-  root.traverse((object) => {
+  const seen = new Set<THREE.Mesh>();
+  roots.forEach((item) => item.traverse((object) => {
     if (
       object instanceof THREE.Mesh &&
       object.visible &&
       !object.userData.excludeFromNavMesh &&
       object.geometry &&
-      object.geometry.getAttribute('position')
+      object.geometry.getAttribute('position') &&
+      !seen.has(object)
     ) {
+      seen.add(object);
       meshes.push(object);
     }
-  });
+  }));
 
   if (!meshes.length) {
     throw new Error('No triangle meshes were found in this model.');
+  }
+
+  const seenGeometries = new Set<THREE.BufferGeometry>();
+  const seenArrays = new Set<ArrayBufferLike>();
+  let inputTriangleCount = 0;
+  let inputGeometryBytes = 0;
+  for (const mesh of meshes) {
+    const geometry = mesh.geometry;
+    const position = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    inputTriangleCount += Math.floor((index?.count ?? position.count) / 3);
+    if (seenGeometries.has(geometry)) continue;
+    seenGeometries.add(geometry);
+    for (const attribute of Object.values(geometry.attributes)) {
+      const attributeArray = 'array' in attribute
+        ? attribute.array
+        : (attribute as THREE.InterleavedBufferAttribute).data.array;
+      const array = attributeArray as unknown as ArrayBufferView;
+      if (!seenArrays.has(array.buffer)) {
+        seenArrays.add(array.buffer);
+        inputGeometryBytes += array.buffer.byteLength;
+      }
+    }
+    const indexArray = index?.array as unknown as ArrayBufferView | undefined;
+    if (indexArray && !seenArrays.has(indexArray.buffer)) {
+      seenArrays.add(indexArray.buffer);
+      inputGeometryBytes += indexArray.buffer.byteLength;
+    }
   }
 
   const result = threeToSoloNavMesh(meshes, {
@@ -71,6 +116,18 @@ export async function buildNavigation(
     throw new Error('NavMesh generation failed. Check model scale and walkable floor geometry.');
   }
 
+  let navMeshTileCount = 0;
+  let navMeshPolygonCount = 0;
+  let navMeshTileDataBytesEstimate = 0;
+  for (let i = 0; i < result.navMesh.getMaxTiles(); i += 1) {
+    const tile = result.navMesh.getTile(i);
+    const header = tile.header();
+    if (!header) continue;
+    navMeshTileCount += 1;
+    navMeshPolygonCount += header.polyCount();
+    navMeshTileDataBytesEstimate += tile.dataSize();
+  }
+
   const query = new NavMeshQuery(result.navMesh);
   const helper = new NavMeshHelper(result.navMesh, {
     navMeshMaterial: new THREE.MeshBasicMaterial({
@@ -83,7 +140,21 @@ export async function buildNavigation(
 
   helper.name = 'NavMesh preview';
   helper.position.y += 0.015;
-  return { navMesh: result.navMesh, query, helper };
+  return {
+    navMesh: result.navMesh,
+    query,
+    helper,
+    metrics: {
+      recastInitializationMs,
+      inputMeshCount: meshes.length,
+      inputTriangleCount,
+      inputGeometryBytes,
+      navMeshTileCount,
+      navMeshPolygonCount,
+      navMeshTileDataBytesEstimate,
+      buildTimeMs: performance.now() - buildStart,
+    },
+  };
 }
 
 export function pathLength(path: Array<{ x: number; y: number; z: number }>) {

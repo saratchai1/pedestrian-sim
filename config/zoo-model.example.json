@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "sourceUnit": "unknown",
+  "scaleToMetres": null,
+  "scaleReference": {
+    "objectName": "",
+    "measuredAxis": "z",
+    "measuredLengthMetres": null
+  },
+  "localOrigin": {
+    "mode": "boundsCenter"
+  },
+  "classification": {
+    "includeNamePatterns": [
+      "\\b(walkway|boardwalk|path|pavement|corridor|floor|ramp|stair|bridge|road|gate)\\b"
+    ],
+    "excludeNamePatterns": [
+      "\\b(tree|plant|foliage|leaf|animal|bench|lamp|sign|furniture|ornament|decor|roof|ceiling)\\b"
+    ],
+    "forceIncludeNames": [],
+    "forceExcludeNames": [],
+    "verySmallMeshMetres": 0.05,
+    "reviewAboveTriangles": 250000
+  }
+}
