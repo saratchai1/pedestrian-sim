@@ -34,7 +34,7 @@ Browser-based BIM evacuation simulation prototype inspired by Pathfinder-style B
 - Save multiple completed scenarios locally for comparison.
 - Export per-agent CSV including profile, speed, pre-movement time, queue wait, exit, evacuation time and travel distance.
 - Built-in demo building.
-- Static deployment configuration for Netlify.
+- Static deployment configuration for Netlify and GitHub Pages.
 
 ## Run locally
 
@@ -47,6 +47,12 @@ Production check:
     npm run preview
 
 The postinstall script copies `web-ifc.wasm` into `public/` so IFC parsing works in the browser.
+
+## GitHub Pages deployment
+
+Set the repository's **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. Push to `main` to build and deploy `dist/`; the workflow also supports manual runs from the Actions tab. The walkway preview model is copied into the production bundle during build.
+
+For this repository, the preview URL will be `https://saratchai1.github.io/pedestrian-sim/?preview=zoo-walkways` after the first successful deployment.
 
 ## In-app Build Mode
 

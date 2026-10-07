@@ -1007,7 +1007,9 @@ async function importFiles(files: readonly File[]) {
 
 async function loadZooWalkwaysPreview() {
   try {
-    const response = await fetch('/generated/models/zoo/walkways.glb');
+    const response = await fetch(
+      `${import.meta.env.BASE_URL}generated/models/zoo/walkways.glb`,
+    );
     if (!response.ok) {
       throw new Error('Generated zoo walkway model is unavailable.');
     }
@@ -1428,7 +1430,7 @@ function runSimulation() {
 
   let runtimeSpawn: THREE.Vector3 | null = null;
   let runtimeExits: ExitTarget[] = [];
-  let runtimeSpawnAreas = spawnAreas;
+  let runtimeSpawnAreas: SpawnAreaTarget[] = spawnAreas;
   let runtimeOccupants = 0;
 
   if (scenarioSource === 'built') {

@@ -5,6 +5,7 @@ dist
 .env.*
 !.env.example
 /public/web-ifc*.wasm
+/public/generated/
 /.tools/
 /tools/blender-*/
 /local-data/
