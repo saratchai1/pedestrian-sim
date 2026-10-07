@@ -52,7 +52,7 @@ The postinstall script copies `web-ifc.wasm` into `public/` so IFC parsing works
 
 Set the repository's **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. Push to `main` to build and deploy `dist/`; the workflow also supports manual runs from the Actions tab. The walkway preview model is copied into the production bundle during build.
 
-For this repository, the preview URL will be `https://saratchai1.github.io/pedestrian-sim/?preview=zoo-walkways` after the first successful deployment.
+After deployment, `https://saratchai1.github.io/pedestrian-sim/` opens the zoo walkway evacuation preview by default. Use `?preview=demo-building` to open the built-in demo building instead.
 
 ## In-app Build Mode
 

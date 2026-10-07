@@ -2155,8 +2155,8 @@ updateIfcSummary();
 renderScenarioResults();
 setModelSaveStatus('Unsaved changes', 'unsaved');
 scheduleAnimate();
-if (new URLSearchParams(window.location.search).get('preview') === 'zoo-walkways') {
-  void loadZooWalkwaysPreview();
-} else {
+if (new URLSearchParams(window.location.search).get('preview') === 'demo-building') {
   void loadDemo();
+} else {
+  void loadZooWalkwaysPreview();
 }
