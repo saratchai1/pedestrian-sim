@@ -20,7 +20,11 @@ import {
 } from './model-store';
 import { type ProfilePreset } from './profiles';
 import { ScenarioStore } from './scenarios';
-import { EvacuationSimulation, type ExitTarget } from './simulation';
+import {
+  EvacuationSimulation,
+  type ExitTarget,
+  type SpawnAreaTarget,
+} from './simulation';
 import { EvacViewer } from './viewer';
 
 function element<T extends HTMLElement>(id: string) {
@@ -50,6 +54,8 @@ const fileInput = element<HTMLInputElement>('fileInput');
 const dropzone = element<HTMLLabelElement>('dropzone');
 const showNav = element<HTMLInputElement>('showNav');
 const showHeatmap = element<HTMLInputElement>('showHeatmap');
+const showAgentLocations = element<HTMLInputElement>('showAgentLocations');
+const playbackSpeedInput = element<HTMLInputElement>('playbackSpeed');
 const bridgeIfcStairs = element<HTMLInputElement>('bridgeIfcStairs');
 const profilePreset = element<HTMLSelectElement>('profilePreset');
 const speedInput = element<HTMLInputElement>('speed');
@@ -67,12 +73,15 @@ let simulation: EvacuationSimulation | null = null;
 let spawn: THREE.Vector3 | null = null;
 let exits: ExitTarget[] = [];
 let resultExits: ExitTarget[] = [];
+let previewSpawnAreas: SpawnAreaTarget[] | null = null;
 let ifcSemantics: IfcSemantics | null = null;
 let placementMode: 'spawn' | 'exit' | null = null;
 let scenarioSource: ScenarioSource = 'manual';
 let modelDirty = true;
 let spawnCreationArmed = false;
 let lastUiUpdate = 0;
+let previewCameraFollow = false;
+let lastPreviewCameraFollow = 0;
 
 function disposeDetachedNavigationRoot() {
   if (!importedNavigationRoot) return;
@@ -758,6 +767,7 @@ function resetSimulation() {
   }
 
   viewer.clearHeatmap();
+  viewer.clearAgentLocations();
   resultExits = [];
   element<HTMLButtonElement>('exportBtn').disabled = true;
   element<HTMLButtonElement>('saveScenario').disabled = true;
@@ -897,6 +907,7 @@ async function loadDemo() {
 async function importFiles(files: readonly File[]) {
   const importStartedAt = performance.now();
   let pendingNavigationRoot: THREE.Group | null = null;
+  let loadNavigationOnly = false;
   try {
     const selection = selectModelFiles(files);
     const name = selection.kind === 'derivatives'
@@ -904,6 +915,18 @@ async function importFiles(files: readonly File[]) {
       : selection.kind === 'glb'
         ? selection.visualFile.name
         : selection.file.name;
+    if (selection.kind === 'derivatives' && selection.visualFile.size > 300 * 1024 * 1024) {
+      loadNavigationOnly = !window.confirm(
+        `The detailed zoo model is ${(selection.visualFile.size / 1e6).toFixed(0)} MB. Loading it can use several GB of memory.\n\nChoose OK to load the detailed model. Choose Cancel to load only the lightweight 3D walkable surfaces (${(selection.navigationFile.size / 1e6).toFixed(0)} MB).`,
+      );
+    } else if (selection.kind === 'glb' && selection.visualFile.size > 300 * 1024 * 1024) {
+      if (!window.confirm(
+        `This GLB is ${(selection.visualFile.size / 1e6).toFixed(0)} MB and may use several GB of memory. Load the detailed model?`,
+      )) {
+        setStatus('Import cancelled');
+        return;
+      }
+    }
     if (selection.kind === 'derivatives') {
       // The preprocessing manifest and both GLBs are already expressed in metres.
       modelScale.value = '1';
@@ -911,7 +934,12 @@ async function importFiles(files: readonly File[]) {
     const extension = selection.kind === 'ifc' || selection.kind === 'fbx'
       ? selection.kind
       : 'glb';
-    setStatus('Importing ' + (selection.kind === 'derivatives' ? 'GLB derivatives' : extension.toUpperCase()) + '...', 'busy');
+    setStatus(
+      loadNavigationOnly
+        ? 'Loading lightweight 3D walkable surfaces...'
+        : 'Importing ' + (selection.kind === 'derivatives' ? 'GLB derivatives' : extension.toUpperCase()) + '...',
+      'busy',
+    );
     let root: THREE.Group;
 
     if (selection.kind === 'ifc') {
@@ -922,8 +950,12 @@ async function importFiles(files: readonly File[]) {
       root = await loadFbxFile(selection.file);
       ifcSemantics = null;
     } else if (selection.kind === 'derivatives') {
-      root = await loadGlbFile(selection.visualFile);
-      pendingNavigationRoot = await loadGlbFile(selection.navigationFile);
+      if (loadNavigationOnly) {
+        root = await loadGlbFile(selection.navigationFile);
+      } else {
+        root = await loadGlbFile(selection.visualFile);
+        pendingNavigationRoot = await loadGlbFile(selection.navigationFile);
+      }
       ifcSemantics = null;
     } else {
       root = await loadGlbFile(selection.visualFile);
@@ -954,8 +986,9 @@ async function importFiles(files: readonly File[]) {
         scenePreparationMs: performance.now() - scenePreparationStartedAt,
       });
     }
-    setStatus(name + ' loaded');
+    setStatus(loadNavigationOnly ? `${selection.kind === 'derivatives' ? selection.navigationFile.name : name} · walkable surfaces only` : name + ' loaded');
     await rebuildNavigation(false);
+    scheduleAnimate();
   } catch (error) {
     if (pendingNavigationRoot) {
       pendingNavigationRoot.traverse((object) => {
@@ -969,6 +1002,223 @@ async function importFiles(files: readonly File[]) {
     ifcSemantics = null;
     updateIfcSummary();
     setStatus(error instanceof Error ? error.message : 'Import failed', 'error');
+  }
+}
+
+async function loadZooWalkwaysPreview() {
+  try {
+    const response = await fetch('/generated/models/zoo/walkways.glb');
+    if (!response.ok) {
+      throw new Error('Generated zoo walkway model is unavailable.');
+    }
+
+    const file = new File(
+      [await response.blob()],
+      'walkways.glb',
+      { type: 'model/gltf-binary' },
+    );
+    await importFiles([file]);
+
+    if (!navigation || statusEl.textContent?.includes('failed')) return;
+    const root = viewer.modelRoot;
+    if (!root) throw new Error('Walkway model did not load.');
+
+    // Pick two real NavMesh points from the imported walkway triangles. These are
+    // temporary preview endpoints, not source-model exit locations.
+    root.updateMatrixWorld(true);
+    const pointByCell = new Map<string, THREE.Vector3>();
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || !object.visible) return;
+      const position = object.geometry.getAttribute('position');
+      if (!position) return;
+      const index = object.geometry.getIndex();
+      const triangleCount = Math.floor((index?.count ?? position.count) / 3);
+      const sampleCount = Math.min(4, triangleCount);
+      for (let sample = 0; sample < sampleCount; sample += 1) {
+        const triangle = Math.floor(((sample + 0.5) * triangleCount) / sampleCount);
+        const vertex = (corner: number) => {
+          const offset = triangle * 3 + corner;
+          const vertexIndex = index ? index.getX(offset) : offset;
+          return new THREE.Vector3()
+            .fromBufferAttribute(position, vertexIndex)
+            .applyMatrix4(object.matrixWorld);
+        };
+        const center = vertex(0).add(vertex(1)).add(vertex(2)).multiplyScalar(1 / 3);
+        const snapped = navigation!.query.findClosestPoint(center);
+        if (!snapped.success) continue;
+        const point = new THREE.Vector3(
+          snapped.point.x,
+          snapped.point.y,
+          snapped.point.z,
+        );
+        const key = Math.round(point.x / 8) + ':' + Math.round(point.z / 8);
+        if (!pointByCell.has(key)) pointByCell.set(key, point);
+      }
+    });
+
+    const candidates = [...pointByCell.values()];
+    if (candidates.length < 2) {
+      throw new Error('Could not find two walkable points for a sample route.');
+    }
+    const selected: THREE.Vector3[] = [candidates[0]];
+    const remaining = new Set(candidates.slice(1));
+    while (selected.length < 48 && remaining.size) {
+      let farthest: THREE.Vector3 | null = null;
+      let farthestDistance = -1;
+      for (const candidate of remaining) {
+        const nearestDistance = Math.min(
+          ...selected.map((point) => Math.hypot(candidate.x - point.x, candidate.z - point.z)),
+        );
+        if (nearestDistance > farthestDistance) {
+          farthest = candidate;
+          farthestDistance = nearestDistance;
+        }
+      }
+      if (!farthest) break;
+      selected.push(farthest);
+      remaining.delete(farthest);
+    }
+
+    let previewRoute: {
+      spawn: THREE.Vector3;
+      exit: THREE.Vector3;
+      length: number;
+      path: THREE.Vector3[];
+    } | null = null;
+    let routeScore = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < selected.length; i += 1) {
+      for (let j = i + 1; j < selected.length; j += 1) {
+        const result = navigation.query.computePath(selected[i], selected[j]);
+        if (!result.success || result.path.length < 2) continue;
+        const last = result.path[result.path.length - 1];
+        if (Math.hypot(
+          last.x - selected[j].x,
+          last.y - selected[j].y,
+          last.z - selected[j].z,
+        ) > 2) continue;
+        let length = 0;
+        for (let point = 1; point < result.path.length; point += 1) {
+          const a = result.path[point - 1];
+          const b = result.path[point];
+          length += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+        }
+        if (length < 15) continue;
+        const score = Math.abs(length - 42);
+        if (score < routeScore) {
+          routeScore = score;
+          previewRoute = {
+            spawn: selected[i],
+            exit: selected[j],
+            length,
+            path: result.path.map((point) =>
+              new THREE.Vector3(point.x, point.y, point.z),
+            ),
+          };
+        }
+      }
+    }
+    if (!previewRoute) {
+      throw new Error('No connected walkway route long enough for a sample evacuation was found.');
+    }
+
+    element<HTMLInputElement>('modelName').value = 'Zoo walkways only';
+    element<HTMLInputElement>('occupants').value = '20';
+    element<HTMLInputElement>('occupants').dispatchEvent(new Event('input'));
+    profilePreset.value = 'mixed';
+    profilePreset.dispatchEvent(new Event('change'));
+    element<HTMLInputElement>('preMovement').value = '8';
+    element<HTMLInputElement>('preMovement').dispatchEvent(new Event('input'));
+    playbackSpeedInput.value = '1';
+    playbackSpeedInput.dispatchEvent(new Event('input'));
+    showHeatmap.checked = true;
+    showAgentLocations.checked = true;
+    showNav.checked = false;
+    navigation.helper.visible = false;
+    spawn = previewRoute.spawn.clone();
+    exits = [{
+      id: 1,
+      name: 'Preview endpoint',
+      width: 3,
+      position: previewRoute.exit.clone(),
+    }];
+    const pathLengths = [0];
+    for (let i = 1; i < previewRoute.path.length; i += 1) {
+      const previous = previewRoute.path[i - 1];
+      const current = previewRoute.path[i];
+      pathLengths.push(
+        pathLengths[i - 1] + previous.distanceTo(current),
+      );
+    }
+    const routeLength = pathLengths[pathLengths.length - 1];
+    previewSpawnAreas = Array.from({ length: 5 }, (_, groupIndex) => {
+      const targetDistance = routeLength * ((groupIndex + 0.5) / 5);
+      let segment = 1;
+      while (
+        segment < pathLengths.length - 1 &&
+        pathLengths[segment] < targetDistance
+      ) {
+        segment += 1;
+      }
+      const start = previewRoute!.path[segment - 1];
+      const end = previewRoute!.path[segment];
+      const segmentLength = pathLengths[segment] - pathLengths[segment - 1];
+      const point = start.clone().lerp(
+        end,
+        segmentLength > 0
+          ? (targetDistance - pathLengths[segment - 1]) / segmentLength
+          : 0,
+      );
+      const direction = new THREE.Vector2(end.x - start.x, end.z - start.z)
+        .normalize();
+      const side = new THREE.Vector2(-direction.y, direction.x);
+      const along = direction.clone().multiplyScalar(1.2);
+      const across = side.multiplyScalar(0.48);
+      const corner = (alongSign: number, acrossSign: number) => ({
+        x: point.x + along.x * alongSign + across.x * acrossSign,
+        z: point.z + along.y * alongSign + across.y * acrossSign,
+      });
+      return {
+        id: 'preview-group-' + (groupIndex + 1),
+        name: 'Walkway visitor group ' + (groupIndex + 1),
+        points: [
+          corner(-1, -1),
+          corner(1, -1),
+          corner(1, 1),
+          corner(-1, 1),
+        ],
+        elevation: point.y,
+        occupants: 4,
+      };
+    });
+    scenarioSource = 'manual';
+    updateScenarioSummary();
+    const cameraTarget = previewRoute.spawn.clone();
+    const cameraOffset = new THREE.Vector3(0.7, 1, 0.7)
+      .normalize()
+      .multiplyScalar(36);
+    viewer.controls.target.copy(cameraTarget);
+    viewer.camera.position.copy(cameraTarget).add(cameraOffset);
+    viewer.camera.near = 0.05;
+    viewer.camera.far = 2000;
+    viewer.camera.updateProjectionMatrix();
+    viewer.controls.update();
+    previewCameraFollow = true;
+    markModelDirty('Zoo walkway preview loaded · unsaved');
+    runSimulation();
+    if (simulation?.agents.length !== 20) {
+      throw new Error('The 20-person sample simulation did not initialize.');
+    }
+    setStatus(
+      'Walkway sample running · 20 mixed visitors in 5 groups · temporary endpoints · ' +
+        Math.round(previewRoute.length) + ' m test route',
+    );
+    scheduleAnimate();
+  } catch (error) {
+    console.error(error);
+    setStatus(
+      error instanceof Error ? error.message : 'Zoo walkway preview failed',
+      'error',
+    );
   }
 }
 
@@ -1210,9 +1460,13 @@ function runSimulation() {
 
     runtimeSpawn = spawn;
     runtimeExits = exits;
-    runtimeSpawnAreas = [];
-    runtimeOccupants =
-      Number(element<HTMLInputElement>('occupants').value) || 1;
+    runtimeSpawnAreas = previewSpawnAreas || [];
+    runtimeOccupants = runtimeSpawnAreas.length
+      ? runtimeSpawnAreas.reduce(
+          (sum, area) => sum + Math.max(1, Math.round(area.occupants)),
+          0,
+        )
+      : Number(element<HTMLInputElement>('occupants').value) || 1;
   }
 
   resetSimulation();
@@ -1339,10 +1593,16 @@ function updateResults() {
 function updateHeatmap() {
   if (!simulation) {
     viewer.clearHeatmap();
+    viewer.clearAgentLocations();
     return;
   }
 
-  viewer.setHeatmap(simulation.snapshot().currentDensity, showHeatmap.checked);
+  const snapshot = simulation.snapshot();
+  viewer.setAgentLocations(
+    simulation.agentLocations(),
+    showAgentLocations.checked,
+  );
+  viewer.setHeatmap(snapshot.currentDensity, showHeatmap.checked);
 }
 
 function downloadCsv() {
@@ -1764,6 +2024,12 @@ bridgeIfcStairs.addEventListener('change', () => {
 });
 
 showHeatmap.addEventListener('change', updateHeatmap);
+showAgentLocations.addEventListener('change', updateHeatmap);
+
+playbackSpeedInput.addEventListener('input', () => {
+  element<HTMLOutputElement>('playbackSpeedOut').textContent =
+    Number(playbackSpeedInput.value).toFixed(2).replace(/0$/, '') + '×';
+});
 
 fileInput.addEventListener('change', () => {
   const files = Array.from(fileInput.files || []);
@@ -1798,13 +2064,40 @@ window.addEventListener('beforeunload', (event) => {
 const clock = new THREE.Clock();
 let perfSampleStartedAt = performance.now();
 let perfSampleFrameCount = 0;
+let animationFrameId: number | null = null;
+let lastSimulationRunning = false;
 
-function animate() {
-  requestAnimationFrame(animate);
+function scheduleAnimate() {
+  if (animationFrameId !== null) return;
+  animationFrameId = requestAnimationFrame(animate);
+}
 
-  simulation?.update(clock.getDelta(), viewer.camera.position);
+function animate(now: number) {
+  animationFrameId = null;
+  simulation?.update(
+    clock.getDelta(),
+    viewer.camera.position,
+    Number(playbackSpeedInput.value),
+  );
 
-  const now = performance.now();
+  if (previewCameraFollow && simulation?.running && now - lastPreviewCameraFollow > 250) {
+    const locations = simulation.agentLocations();
+    if (locations.length) {
+      const center = locations.reduce(
+        (sum, location) => sum.add(new THREE.Vector3(
+          location.position.x,
+          location.position.y,
+          location.position.z,
+        )),
+        new THREE.Vector3(),
+      ).multiplyScalar(1 / locations.length);
+      const delta = center.sub(viewer.controls.target).multiplyScalar(0.35);
+      viewer.controls.target.add(delta);
+      viewer.camera.position.add(delta);
+      viewer.controls.update();
+    }
+    lastPreviewCameraFollow = now;
+  }
 
   if (import.meta.env.DEV) {
     perfSampleFrameCount += 1;
@@ -1819,23 +2112,35 @@ function animate() {
     }
   }
 
-  if (now - lastUiUpdate > 250) {
+  const simulationRunning = Boolean(simulation?.running);
+  const simulationStateChanged = simulationRunning !== lastSimulationRunning;
+  if (simulationStateChanged || (simulationRunning && now - lastUiUpdate > 250)) {
     updateResults();
     updateHeatmap();
 
-    if (
-      simulation &&
-      !simulation.running &&
-      simulation.snapshot().active === 0
-    ) {
+    if (simulation && !simulationRunning && simulation.snapshot().active === 0) {
       setStatus('Evacuation complete');
     }
-
+    lastSimulationRunning = simulationRunning;
     lastUiUpdate = now;
   }
 
-  viewer.render();
+  const cameraMoving = viewer.render();
+  if (simulation?.running || cameraMoving) {
+    scheduleAnimate();
+  } else {
+    clock.getDelta();
+  }
 }
+
+viewer.controls.addEventListener('start', () => {
+  previewCameraFollow = false;
+  scheduleAnimate();
+});
+for (const eventName of ['click', 'change', 'input', 'keydown', 'drop']) {
+  document.addEventListener(eventName, scheduleAnimate);
+}
+window.addEventListener('resize', scheduleAnimate);
 
 syncBuildSettings();
 refreshSavedModelButton();
@@ -1847,5 +2152,9 @@ updateSimulationWorkspaceLock();
 updateIfcSummary();
 renderScenarioResults();
 setModelSaveStatus('Unsaved changes', 'unsaved');
-animate();
-void loadDemo();
+scheduleAnimate();
+if (new URLSearchParams(window.location.search).get('preview') === 'zoo-walkways') {
+  void loadZooWalkwaysPreview();
+} else {
+  void loadDemo();
+}

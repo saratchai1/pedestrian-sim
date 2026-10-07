@@ -28,6 +28,8 @@ Browser-based BIM evacuation simulation prototype inspired by Pathfinder-style B
 - Pre-movement delay distributions.
 - Optional SFPE-style exit flow cap using effective door width and a delay timer.
 - Live evacuation time, P95 time, density heatmap, exit throughput, queue length and queue wait.
+- Live individual occupant markers with hover details for ID, movement state, profile and coordinates.
+- Adjustable simulation playback speed from 0.25× to 4×, independent of occupant walking speed.
 - Per-exit configured/measured flow diagnostics.
 - Save multiple completed scenarios locally for comparison.
 - Export per-agent CSV including profile, speed, pre-movement time, queue wait, exit, evacuation time and travel distance.

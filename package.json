@@ -12,6 +12,8 @@
     "test:model-tools": "python -m unittest discover -s tools/model-preprocess -p \"test_*.py\"",
     "model": "node tools/model-preprocess/run.mjs",
     "model:inspect": "node tools/model-preprocess/run.mjs --inspect-only",
+    "model:walkways": "node tools/model-preprocess/walkways.mjs",
+    "model:validate": "node --expose-gc tools/model-preprocess/validate_zoo_model.mjs",
     "check:artifacts": "node scripts/check-large-artifacts.mjs"
   },
   "dependencies": {

@@ -9,6 +9,15 @@ dist
 /tools/blender-*/
 /local-data/
 /generated/models/
+# Keep the lightweight preview source under version control while ignoring
+# generated zoo model assets and reports in the same directory.
+!/generated/
+!/generated/models/
+/generated/models/*
+!/generated/models/zoo/
+/generated/models/zoo/*
+!/generated/models/zoo/3d-preview.html
+!/generated/models/zoo/3d-preview.ts
 /config/zoo-model.local.json
 __pycache__/
 *.py[cod]

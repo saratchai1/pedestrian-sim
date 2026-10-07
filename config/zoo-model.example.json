@@ -12,10 +12,10 @@
   },
   "classification": {
     "includeNamePatterns": [
-      "\\b(walkway|boardwalk|path|pavement|corridor|floor|ramp|stair|bridge|road|gate)\\b"
+      "\\b(walkway|boardwalk|pedestrian[ _-]*path)\\b|ทางเท้า|ทางเดิน"
     ],
     "excludeNamePatterns": [
-      "\\b(tree|plant|foliage|leaf|animal|bench|lamp|sign|furniture|ornament|decor|roof|ceiling|water|lake|pool|railing|handrail)\\b"
+      "\\b(tree|plant|foliage|leaf|animal|bench|lamp|sign|furniture|ornament|decor|roof|ceiling|railing|handrail|lake|pool|pond|river|stream|canal)\\b|water.?feature|water[_ -]*animal|น้ำ|บ่อ|สระ|คลอง|แม่น้ำ"
     ],
     "forceIncludeNames": [],
     "forceExcludeNames": [],

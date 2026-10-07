@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import type { AgentLocation } from './simulation';
 
 export class EvacViewer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(45, 1, 0.05, 5000);
   readonly renderer = new THREE.WebGLRenderer({
-    antialias: true,
+    antialias: false,
     powerPreference: 'high-performance',
   });
   readonly controls: OrbitControls;
@@ -16,17 +17,39 @@ export class EvacViewer {
 
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
+  private lastRenderAt = 0;
+  private heatmap: THREE.InstancedMesh | null = null;
+  private heatmapCapacity = 0;
+  private readonly heatmapTransform = new THREE.Object3D();
+  private readonly heatmapColor = new THREE.Color();
+  private agentMarkers: THREE.InstancedMesh | null = null;
+  private agentMarkerCapacity = 0;
+  private agentMarkerIds: number[] = [];
+  private agentDetails: AgentLocation[] = [];
+  private readonly agentTooltip: HTMLDivElement;
 
   constructor(private container: HTMLElement) {
     this.scene.background = new THREE.Color(0x0a0f19);
     this.scene.fog = new THREE.Fog(0x0a0f19, 45, 110);
 
     this.camera.position.set(21, 20, 25);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Cap the backing buffer on high-DPI screens: large imported sites are
+    // fill-rate bound, while 1.5× remains sharp in the normal viewport.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
+
+    this.agentTooltip = document.createElement('div');
+    this.agentTooltip.className = 'agent-tooltip hidden';
+    container.appendChild(this.agentTooltip);
+    this.renderer.domElement.addEventListener('pointermove', (event) => {
+      this.updateAgentTooltip(event);
+    });
+    this.renderer.domElement.addEventListener('pointerleave', () => {
+      this.agentTooltip.classList.add('hidden');
+    });
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -81,6 +104,10 @@ export class EvacViewer {
 
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const radius = Math.max(sphere.radius, 3);
+    // The fixed demo fog hides the center of large site models entirely.
+    this.scene.fog = radius > 100
+      ? null
+      : new THREE.Fog(0x0a0f19, 45, 110);
     this.controls.target.copy(sphere.center);
     this.camera.position.copy(sphere.center).add(
       new THREE.Vector3(radius * 1.25, radius, radius * 1.35),
@@ -181,32 +208,196 @@ export class EvacViewer {
   }
 
   setHeatmap(density: Map<string, number>, visible: boolean) {
-    this.clearGroup(this.heatmapStage);
-    if (!visible || !density.size) return;
+    if (!visible || !density.size) {
+      this.clearHeatmap();
+      return;
+    }
 
-    const max = Math.max(...density.values(), 1);
-
-    for (const [key, count] of density) {
-      const parts = key.split(',').map(Number);
-      const x = parts[0];
-      const z = parts[1];
-      const ratio = count / max;
+    if (!this.heatmap || density.size > this.heatmapCapacity) {
+      this.clearHeatmap();
+      this.heatmapCapacity = Math.max(64, 2 ** Math.ceil(Math.log2(density.size)));
+      const geometry = new THREE.PlaneGeometry(0.96, 0.96);
+      geometry.rotateX(-Math.PI / 2);
       const material = new THREE.MeshBasicMaterial({
-        color: new THREE.Color().setHSL(0.13 * (1 - ratio), 0.9, 0.5),
+        color: 0xffffff,
         transparent: true,
-        opacity: 0.18 + ratio * 0.48,
+        opacity: 0.52,
+        depthTest: false,
         depthWrite: false,
         side: THREE.DoubleSide,
       });
-      const tile = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 0.96), material);
-      tile.rotation.x = -Math.PI / 2;
-      tile.position.set(x + 0.5, 0.06, z + 0.5);
-      this.heatmapStage.add(tile);
+      this.heatmap = new THREE.InstancedMesh(geometry, material, this.heatmapCapacity);
+      this.heatmap.name = 'Instanced density heatmap';
+      this.heatmap.count = 0;
+      this.heatmap.frustumCulled = false;
+      this.heatmap.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.heatmapStage.add(this.heatmap);
+    }
+
+    const heatmapMaterial = Array.isArray(this.heatmap.material)
+      ? this.heatmap.material[0]
+      : this.heatmap.material;
+    if (heatmapMaterial instanceof THREE.MeshBasicMaterial) {
+      // InstancedMesh uses instanceColor directly; vertexColors would require
+      // a per-vertex color attribute on the plane and can hide the color ramp.
+      heatmapMaterial.vertexColors = false;
+      heatmapMaterial.color.set(0xffffff);
+    }
+    heatmapMaterial.depthTest = false;
+    heatmapMaterial.needsUpdate = true;
+    this.heatmap.renderOrder = 5;
+
+    let max = 1;
+    for (const count of density.values()) max = Math.max(max, count);
+
+    // Older in-memory simulations keyed cells by X/Z only. Infer their floor
+    // elevation from the already available occupant positions while they run.
+    const floorByCell = new Map<string, number>();
+    for (const location of this.agentDetails) {
+      const key =
+        Math.floor(location.position.x) + ',' + Math.floor(location.position.z);
+      if (!floorByCell.has(key)) {
+        floorByCell.set(key, Math.round(location.position.y * 2) / 2);
+      }
+    }
+
+    let slot = 0;
+    for (const [key, count] of density) {
+      const parts = key.split(',').map(Number);
+      const [cellX, cellY, cellZ] = parts.length === 3
+        ? parts
+        : [parts[0], floorByCell.get(parts[0] + ',' + parts[1]) ?? 0, parts[1]];
+      this.heatmapTransform.position.set(cellX + 0.5, cellY + 0.06, cellZ + 0.5);
+      this.heatmapTransform.rotation.set(0, 0, 0);
+      this.heatmapTransform.scale.set(1, 1, 1);
+      this.heatmapTransform.updateMatrix();
+      this.heatmap.setMatrixAt(slot, this.heatmapTransform.matrix);
+      const ratio = count / max;
+      this.heatmapColor.setHSL(0.13 * (1 - ratio), 0.9, 0.5);
+      this.heatmap.setColorAt(slot, this.heatmapColor);
+      slot += 1;
+    }
+    this.heatmap.count = slot;
+    this.heatmap.instanceMatrix.needsUpdate = true;
+    if (this.heatmap.instanceColor) this.heatmap.instanceColor.needsUpdate = true;
+  }
+
+  setAgentLocations(locations: AgentLocation[], visible: boolean) {
+    if (!visible || !locations.length) {
+      this.clearAgentLocations();
+      return;
+    }
+
+    if (!this.agentMarkers || locations.length > this.agentMarkerCapacity) {
+      this.clearAgentLocations();
+      this.agentMarkerCapacity = Math.max(
+        64,
+        2 ** Math.ceil(Math.log2(locations.length)),
+      );
+      this.agentMarkers = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(0.14, 8, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.95,
+        }),
+        this.agentMarkerCapacity,
+      );
+      this.agentMarkers.name = 'Individual occupant locations';
+      this.agentMarkers.count = 0;
+      this.agentMarkers.frustumCulled = false;
+      this.agentMarkers.renderOrder = 10;
+      this.agentMarkers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.overlayStage.add(this.agentMarkers);
+    }
+
+    const colors = {
+      waiting: new THREE.Color(0x60a5fa),
+      moving: new THREE.Color(0x2dd4bf),
+      queued: new THREE.Color(0xf59e0b),
+    };
+    this.agentMarkerIds = [];
+    this.agentDetails = locations;
+    locations.forEach((location, index) => {
+      this.heatmapTransform.position.set(
+        location.position.x,
+        location.position.y + 1.45,
+        location.position.z,
+      );
+      this.heatmapTransform.rotation.set(0, 0, 0);
+      this.heatmapTransform.scale.set(1, 1, 1);
+      this.heatmapTransform.updateMatrix();
+      this.agentMarkers!.setMatrixAt(index, this.heatmapTransform.matrix);
+      this.agentMarkers!.setColorAt(index, colors[location.status]);
+      this.agentMarkerIds.push(location.id);
+    });
+    this.agentMarkers.count = locations.length;
+    this.agentMarkers.instanceMatrix.needsUpdate = true;
+    if (this.agentMarkers.instanceColor) {
+      this.agentMarkers.instanceColor.needsUpdate = true;
     }
   }
 
+  private updateAgentTooltip(event: PointerEvent) {
+    if (!this.agentMarkers?.count) {
+      this.agentTooltip.classList.add('hidden');
+      return;
+    }
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hit = this.raycaster.intersectObject(this.agentMarkers, false)[0];
+    const location = hit?.instanceId == null
+      ? null
+      : this.agentDetails[hit.instanceId];
+
+    if (!location) {
+      this.agentTooltip.classList.add('hidden');
+      return;
+    }
+
+    const status = location.status === 'queued'
+      ? 'Queued'
+      : location.status === 'waiting'
+        ? 'Waiting to move'
+        : 'Moving';
+    this.agentTooltip.textContent =
+      'Occupant ' + this.agentMarkerIds[hit.instanceId!] +
+      ' · ' + status + ' · ' + location.profile +
+      ' · X ' + location.position.x.toFixed(1) + ' m' +
+      ' · Y ' + location.position.y.toFixed(1) + ' m' +
+      ' · Z ' + location.position.z.toFixed(1) + ' m';
+    this.agentTooltip.style.left = Math.min(
+      event.clientX - rect.left + 12,
+      Math.max(8, rect.width - 260),
+    ) + 'px';
+    this.agentTooltip.style.top = Math.max(8, event.clientY - rect.top - 34) + 'px';
+    this.agentTooltip.classList.remove('hidden');
+  }
+
+  clearAgentLocations() {
+    if (this.agentMarkers) {
+      this.overlayStage.remove(this.agentMarkers);
+      this.disposeObject(this.agentMarkers);
+      this.agentMarkers = null;
+      this.agentMarkerCapacity = 0;
+    }
+    this.agentMarkerIds = [];
+    this.agentDetails = [];
+    this.agentTooltip.classList.add('hidden');
+  }
+
   clearHeatmap() {
-    this.clearGroup(this.heatmapStage);
+    if (this.heatmap) {
+      this.heatmapStage.remove(this.heatmap);
+      this.disposeObject(this.heatmap);
+      this.heatmap = null;
+      this.heatmapCapacity = 0;
+    }
   }
 
   private clearGroup(group: THREE.Group) {
@@ -225,7 +416,11 @@ export class EvacViewer {
   }
 
   render() {
-    this.controls.update();
+    const cameraMoving = this.controls.update();
+    const now = performance.now();
+    if (now - this.lastRenderAt < 1000 / 45) return true;
     this.renderer.render(this.scene, this.camera);
+    this.lastRenderAt = now;
+    return cameraMoving;
   }
 }

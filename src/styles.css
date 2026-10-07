@@ -160,6 +160,19 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   backdrop-filter: blur(12px);
   pointer-events: none;
 }
+.agent-tooltip {
+  position: absolute;
+  z-index: 2;
+  max-width: 250px;
+  padding: 7px 9px;
+  border: 1px solid #3a4d69;
+  border-radius: 7px;
+  background: #0b1422ed;
+  color: #e5edf7;
+  font-size: 10px;
+  line-height: 1.4;
+  pointer-events: none;
+}
 .hidden { display: none; }
 .viewport-legend {
   position: absolute;
@@ -736,3 +749,25 @@ body.build-mode #viewport canvas {
   border-radius: 8px;
   background: #0c1725;
 }
+
+/* Keep the dense workspace readable while giving controls clearer focus. */
+html { scrollbar-color: #34445a #0d1623; scrollbar-width: thin; }
+.panel::-webkit-scrollbar { width: 8px; }
+.panel::-webkit-scrollbar-track { background: #0d1623; }
+.panel::-webkit-scrollbar-thumb { border: 2px solid #0d1623; border-radius: 99px; background: #34445a; }
+.topbar { background: linear-gradient(180deg, #101a29, #0c1320); box-shadow: 0 6px 22px #02061733; }
+.left-panel, .results-panel { background: linear-gradient(180deg, #101a29, #0d1522); }
+.section-title { color: #a4b7c9; font-size: 11px; letter-spacing: .1em; }
+label { color: #b0bfd0; font-size: 12px; }
+.mini-title { color: #d1dce8; font-size: 11px; }
+.hint { color: #8998ad; font-size: 11px; line-height: 1.5; }
+button { font-size: 12px; }
+button:focus-visible, input:focus-visible, select:focus-visible, .file-button:focus-within {
+  outline: 2px solid #5eead4;
+  outline-offset: 2px;
+}
+.scenario-source-card b { font-size: 11px; }
+.scenario-source-card small { font-size: 9px; }
+.scenario-total { font-size: 10px; }
+.population-row { font-size: 10px; }
+.viewport-legend { box-shadow: 0 8px 24px #0004; }

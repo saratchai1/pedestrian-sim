@@ -70,6 +70,12 @@ const PANTS = [0x111827, 0x1f2937, 0x334155, 0x292524];
 const SKIN = [0xf0c8a0, 0xd8a176, 0xb97850, 0x8a563c, 0x6c402d];
 const HAIR = [0x18181b, 0x292524, 0x3f2d20, 0x5c4033, 0x6b4f3f];
 const SHOES = [0x111827, 0x27272a, 0x3f3f46, 0x44403c];
+const AVATAR_GEOMETRY_HEIGHT_METRES = {
+  detail: 1.925, // Hair crown: 1.755 + 0.17 m.
+  medium: 1.82, // Head top: 1.66 + 0.16 m.
+  far: 1.805, // Head top: 1.66 + 0.145 m.
+} as const;
+const HUMAN_HEIGHT_VARIATION = { min: 0.95, max: 1.043 } as const;
 
 function hashedNumber(agentIndex: number, salt: number) {
   let value =
@@ -270,7 +276,10 @@ export class HumanCrowdHelper extends THREE.Group {
       skin: new THREE.Color(hashedChoice(SKIN, agentIndex, 5)),
       hair: new THREE.Color(hashedChoice(HAIR, agentIndex, 6)),
       shoes: new THREE.Color(hashedChoice(SHOES, agentIndex, 7)),
-      heightScale: 0.95 + hashedNumber(agentIndex, 8) * 0.1,
+      heightScale:
+        HUMAN_HEIGHT_VARIATION.min +
+        hashedNumber(agentIndex, 8) *
+          (HUMAN_HEIGHT_VARIATION.max - HUMAN_HEIGHT_VARIATION.min),
       widthScale: 0.92 + hashedNumber(agentIndex, 9) * 0.16,
     };
 
@@ -343,9 +352,11 @@ export class HumanCrowdHelper extends THREE.Group {
     y: number,
     z: number,
     appearance: Appearance,
+    geometryHeight: number = AVATAR_GEOMETRY_HEIGHT_METRES.detail,
   ) {
+    // Normalize each LOD's measured crown height to the CrowdAgent's metres.
     const heightScale =
-      Math.max(0.84, Math.min(1.16, agent.height / 1.7)) *
+      Math.max(0.84, Math.min(1.16, agent.height / geometryHeight)) *
       appearance.heightScale;
     const widthScale =
       Math.max(0.84, Math.min(1.18, agent.radius / 0.24)) *
@@ -562,7 +573,7 @@ export class HumanCrowdHelper extends THREE.Group {
     z: number,
     appearance: Appearance,
   ) {
-    this.setRoot(agent, pose, yaw, x, y, z, appearance);
+    this.setRoot(agent, pose, yaw, x, y, z, appearance, AVATAR_GEOMETRY_HEIGHT_METRES.medium);
 
     this.setPart(this.midParts.torso, slot, 0, 1.18, 0);
     this.setPart(this.midParts.head, slot, 0, 1.66, 0);
@@ -637,7 +648,7 @@ export class HumanCrowdHelper extends THREE.Group {
     z: number,
     appearance: Appearance,
   ) {
-    this.setRoot(agent, pose, yaw, x, y, z, appearance);
+    this.setRoot(agent, pose, yaw, x, y, z, appearance, AVATAR_GEOMETRY_HEIGHT_METRES.far);
 
     this.setPart(this.farParts.body, slot, 0, 1.17, 0);
     this.setPart(this.farParts.lowerBody, slot, 0, 0.5, 0);
@@ -695,7 +706,8 @@ export class HumanCrowdHelper extends THREE.Group {
       let yaw = this.lastYaw.get(agent.agentIndex) ?? 0;
 
       if (horizontalSpeed > 0.025) {
-        const targetYaw = Math.atan2(velocity.x, velocity.z);
+        // Avatar geometry faces local -Z, so orient that axis along velocity.
+        const targetYaw = Math.atan2(-velocity.x, -velocity.z);
         yaw = smoothAngle(yaw, targetYaw, 0.28);
         this.lastYaw.set(agent.agentIndex, yaw);
       }

@@ -33,6 +33,13 @@ export type SpawnAreaTarget = {
   occupants: number;
 };
 
+export type AgentLocation = {
+  id: number;
+  position: { x: number; y: number; z: number };
+  status: 'waiting' | 'moving' | 'queued';
+  profile: string;
+};
+
 export type SimConfig = {
   occupants: number;
   walkingSpeed: number;
@@ -340,7 +347,11 @@ export class EvacuationSimulation {
       }
       record.lastPosition.copy(position);
 
-      const key = Math.floor(position.x) + ',' + Math.floor(position.z);
+      // Keep density cells separate by floor so imported multi-level models
+      // get a heatmap at each occupant's actual elevation.
+      const floorY = Math.round(position.y * 2) / 2;
+      const key =
+        Math.floor(position.x) + ',' + floorY + ',' + Math.floor(position.z);
       density.set(key, (density.get(key) || 0) + 1);
 
       if (
@@ -403,10 +414,10 @@ export class EvacuationSimulation {
     }
   }
 
-  update(delta: number, cameraPosition?: THREE.Vector3) {
+  update(delta: number, cameraPosition?: THREE.Vector3, timeScale = 1) {
     if (!this.running) return;
 
-    this.accumulator += Math.min(delta, 0.25);
+    this.accumulator += Math.min(delta, 0.25) * Math.max(0.1, timeScale);
     let stepped = false;
 
     while (this.accumulator >= this.fixedStep && this.running) {
@@ -486,6 +497,23 @@ export class EvacuationSimulation {
       profileCounts,
       currentDensity: new Map(this.currentDensity),
     };
+  }
+
+  agentLocations(): AgentLocation[] {
+    return this.agents.flatMap((record) => {
+      if (record.evacuatedAt !== null) return [];
+      const position = record.agent.position();
+      return [{
+        id: record.id,
+        position: { x: position.x, y: position.y, z: position.z },
+        status: record.queuedAt !== null
+          ? 'queued'
+          : record.started
+            ? 'moving'
+            : 'waiting',
+        profile: record.profile,
+      }];
+    });
   }
 
   toCsv() {

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a1110" />
+    <title>LP2410 Zoo · Evacuation study</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #e7eee9;
+        background: #0a1110;
+        --panel: rgba(15, 25, 23, .94);
+        --panel-edge: rgba(177, 205, 189, .12);
+        --muted: #8a9b93;
+        --mint: #8be0b3;
+        --blue: #75b8ff;
+        --green: #69d5a1;
+      }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { display: grid; grid-template-rows: 72px minmax(0, 1fr) 108px; background: #0a1110; }
+      button, input { font: inherit; }
+      button { color: inherit; }
+      .topbar {
+        display: flex; align-items: center; gap: 22px; padding: 0 22px;
+        background: var(--panel); border-bottom: 1px solid var(--panel-edge); z-index: 2;
+      }
+      .identity { display: flex; align-items: center; gap: 12px; min-width: 245px; }
+      .brandmark {
+        width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto;
+        border: 1px solid rgba(139, 224, 179, .34); border-radius: 12px;
+        color: var(--mint); background: linear-gradient(145deg, #1a342a, #10201b);
+        font-size: 13px; font-weight: 850; letter-spacing: -.04em;
+      }
+      .title-block { min-width: 0; }
+      .title-block strong { display: block; font-size: 14px; letter-spacing: .01em; }
+      .eyebrow { display: block; color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .15em; text-transform: uppercase; }
+      .study-label { margin-top: 3px; color: #d1ddd5; font-size: 11px; }
+      .divider { width: 1px; height: 32px; background: var(--panel-edge); }
+      .status-wrap { display: grid; gap: 2px; min-width: 156px; }
+      #status { color: #c9d8ce; font-size: 11px; }
+      .ready { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+      .ready i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px #69d5a180; }
+      .top-spacer { flex: 1; }
+      .metric { display: grid; gap: 1px; min-width: 95px; }
+      .metric b { font-size: 14px; font-variant-numeric: tabular-nums; }
+      .metric small { color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+      .actions { display: flex; align-items: center; gap: 8px; }
+      .actions button, #play {
+        display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        min-height: 36px; padding: 0 12px; border: 1px solid var(--panel-edge);
+        border-radius: 9px; background: #182421; color: #dbe8df; cursor: pointer;
+        font-size: 11px; font-weight: 680; transition: background .16s ease, border-color .16s ease, transform .16s ease;
+      }
+      .actions button:hover { border-color: #567363; background: #20332b; }
+      .actions button:active, #play:active { transform: translateY(1px); }
+      .actions button:focus-visible, #play:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+      #load-full { color: #afc0b5; background: transparent; }
+      #load-full:disabled { opacity: .5; cursor: progress; }
+      #scene { min-height: 0; position: relative; overflow: hidden; background: #dfe8e1; }
+      #scene canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+      .scene-topline { position: absolute; z-index: 1; top: 20px; left: 22px; display: flex; align-items: center; gap: 9px; pointer-events: none; }
+      .scene-topline b { color: #18241f; font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
+      .scene-topline span { padding: 4px 7px; border: 1px solid #18241f1a; border-radius: 5px; background: #f5f8f4c9; color: #3c5146; font-size: 9px; font-weight: 700; letter-spacing: .06em; }
+      .scene-legend { position: absolute; z-index: 1; left: 20px; bottom: 18px; display: flex; flex-wrap: wrap; gap: 14px; padding: 9px 12px; border: 1px solid #13221d1c; border-radius: 9px; background: #f5f8f4df; color: #41564b; box-shadow: 0 4px 18px #24392b12; pointer-events: none; }
+      .scene-legend span { display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 620; }
+      .dot { width: 8px; height: 8px; display: inline-block; border-radius: 50%; }
+      .dot.start { background: var(--blue); box-shadow: 0 0 0 3px #75b8ff25; }
+      .dot.exit { background: var(--green); box-shadow: 0 0 0 3px #69d5a125; }
+      .dot.people { background: #963bca; box-shadow: 0 0 0 3px #963bca20; }
+      #loading { position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(400px, calc(100vw - 36px)); padding: 20px; border: 1px solid #ffffff20; border-radius: 15px; background: #101c18f2; box-shadow: 0 20px 70px #0a111055; backdrop-filter: blur(18px); }
+      #loading[hidden] { display: none; }
+      #loading-label { display: block; margin-bottom: 12px; font-size: 12px; font-weight: 650; }
+      progress { width: 100%; height: 7px; overflow: hidden; border: 0; border-radius: 99px; background: #293630; accent-color: var(--mint); }
+      progress::-webkit-progress-bar { border-radius: 99px; background: #293630; }
+      progress::-webkit-progress-value { border-radius: 99px; background: linear-gradient(90deg, #58c78f, #a0eac1); }
+      progress::-moz-progress-bar { border-radius: 99px; background: linear-gradient(90deg, #58c78f, #a0eac1); }
+      .playback {
+        display: grid; grid-template-columns: auto minmax(100px, 1fr) auto; gap: 10px 20px;
+        align-items: center; padding: 15px 22px 12px; background: var(--panel);
+        border-top: 1px solid var(--panel-edge); z-index: 2;
+      }
+      .play-control { display: flex; align-items: center; gap: 11px; }
+      #play { width: 40px; height: 40px; min-height: 40px; padding: 0; border-color: transparent; border-radius: 12px; background: var(--mint); color: #092017; }
+      #play:hover { background: #a4ecc4; }
+      #play svg { width: 15px; height: 15px; fill: currentColor; }
+      .time-readout { min-width: 78px; }
+      #time { display: block; font-size: 18px; font-weight: 760; font-variant-numeric: tabular-nums; line-height: 1.1; }
+      .time-readout small { color: var(--muted); font-size: 8px; font-weight: 720; letter-spacing: .12em; text-transform: uppercase; }
+      .timeline { min-width: 0; display: grid; gap: 3px; }
+      #scrubber { width: 100%; height: 20px; margin: 0; accent-color: var(--mint); cursor: pointer; }
+      .ticks { display: flex; justify-content: space-between; color: #708278; font-size: 9px; font-variant-numeric: tabular-nums; }
+      .evacuation-stat { min-width: 124px; text-align: right; }
+      #evacuated { display: block; color: #e7eee9; font-size: 13px; font-weight: 720; font-variant-numeric: tabular-nums; }
+      .evacuation-stat small { color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+      #count { grid-column: 2 / 4; color: #819189; font-size: 10px; }
+      #instructions { grid-column: 1 / -1; color: #74867c; font-size: 9px; }
+      @media (max-width: 900px) {
+        body { grid-template-rows: 64px minmax(0, 1fr) 100px; }
+        .topbar { gap: 12px; padding: 0 14px; }
+        .identity { min-width: 0; }
+        .divider, .status-wrap, #load-full { display: none; }
+        .metric { min-width: 74px; }
+        .actions button { min-height: 34px; padding: 0 9px; }
+        .playback { padding-inline: 14px; gap: 8px 12px; }
+      }
+      @media (max-width: 600px) {
+        body { grid-template-rows: 58px minmax(0, 1fr) 96px; }
+        .topbar { gap: 9px; padding: 0 10px; }
+        .brandmark { width: 32px; height: 32px; border-radius: 10px; }
+        .title-block strong { font-size: 12px; }
+        .eyebrow { font-size: 8px; }
+        .study-label { font-size: 10px; }
+        .metric { min-width: 60px; }
+        .metric b { font-size: 12px; }
+        .metric small { font-size: 8px; }
+        .actions { gap: 5px; }
+        .actions button { width: 34px; min-width: 34px; padding: 0; overflow: hidden; font-size: 0; }
+        .actions button svg { flex: 0 0 auto; }
+        .scene-topline { top: 12px; left: 12px; }
+        .scene-legend { left: 10px; bottom: 10px; gap: 9px; padding: 7px 9px; }
+        .scene-legend span { font-size: 9px; }
+        .playback { grid-template-columns: auto minmax(0, 1fr) auto; gap: 5px 9px; padding: 9px 11px; }
+        .play-control { gap: 7px; }
+        #play { width: 36px; height: 36px; min-height: 36px; }
+        #time { font-size: 15px; }
+        .time-readout small { font-size: 7px; }
+        .evacuation-stat { min-width: 92px; }
+        #evacuated { font-size: 11px; }
+        .evacuation-stat small { font-size: 8px; }
+        #count { grid-column: 1 / -1; font-size: 9px; }
+        #instructions { display: none; }
+      }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="identity">
+        <div class="brandmark" aria-hidden="true">ES</div>
+        <div class="title-block">
+          <span class="eyebrow">EvacSim · 3D playback</span>
+          <strong>LP2410 Zoo</strong>
+        </div>
+      </div>
+      <div class="divider" aria-hidden="true"></div>
+      <div class="status-wrap">
+        <div class="ready"><i aria-hidden="true"></i> Simulation ready</div>
+        <span id="status">Preparing walkable geometry…</span>
+      </div>
+      <div class="top-spacer"></div>
+      <div class="metric"><b id="zone-count">7 areas</b><small>test zones</small></div>
+      <div class="metric"><b id="people-count">100 people</b><small>in scenario</small></div>
+      <nav class="actions" aria-label="Scene controls">
+        <button id="fit" type="button" aria-label="Show the whole zoo" title="Show the whole zoo">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4M7 3 3 7m14-4-4 4m4 6-4 4m-6 0-4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Whole site</span>
+        </button>
+        <button id="focus" type="button" aria-label="Focus on people" title="Focus on people">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><circle cx="10" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 16v-1.2a4.5 4.5 0 0 1 9 0V16M3 7V3h4m6 0h4v4m0 6v4h-4m-6 0H3v-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>People</span>
+        </button>
+        <button id="load-full" type="button" title="Load the optional 835 MB detailed model">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M3 5.5 10 2l7 3.5v9L10 18l-7-3.5v-9ZM3 5.5l7 3.7 7-3.7M10 9.2V18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span>Detail · 835 MB</span>
+        </button>
+      </nav>
+    </header>
+
+    <main id="scene" aria-label="Interactive 3D zoo evacuation scene">
+      <div class="scene-topline"><b>LP2410 · site overview</b><span>3D WALKABLE SURFACE</span></div>
+      <div class="scene-legend" aria-label="Map legend">
+        <span><i class="dot start" aria-hidden="true"></i>Start areas</span>
+        <span><i class="dot exit" aria-hidden="true"></i>Test exits</span>
+        <span><i class="dot people" aria-hidden="true"></i>People</span>
+      </div>
+      <div id="loading">
+        <span id="loading-label">Loading walkable geometry…</span>
+        <progress id="progress" max="100" value="0" aria-label="Model loading progress"></progress>
+      </div>
+    </main>
+
+    <footer class="playback">
+      <div class="play-control">
+        <button id="play" type="button" aria-label="Pause simulation" title="Pause simulation">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zm5 0h3v10H9z"/></svg>
+        </button>
+        <div class="time-readout"><span id="time">0.0 s</span><small>simulated time</small></div>
+      </div>
+      <div class="timeline">
+        <input id="scrubber" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation time" />
+        <div class="ticks"><span>0 s</span><span id="duration">33.5 s</span></div>
+      </div>
+      <div class="evacuation-stat"><span id="evacuated">0 / 100</span><small>people evacuated</small></div>
+      <div id="count">Loading scenario data…</div>
+      <div id="instructions">Drag to orbit · Scroll to zoom · Right-drag to pan</div>
+    </footer>
+    <script type="module" src="./3d-preview.ts"></script>
+  </body>
+</html>
